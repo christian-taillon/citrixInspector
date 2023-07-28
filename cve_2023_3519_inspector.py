@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 # coding=utf-8
+#
+# AUTHOR
+# Bryan Smith (@securekomodo)
 
 import argparse
 import urllib3
