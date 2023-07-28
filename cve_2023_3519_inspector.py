@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 # coding=utf-8
-#
-# AUTHOR
-# Bryan Smith (@securekomodo)
-
 
 import argparse
-import requests
+import urllib3
+from urllib3.util.ssl_ import create_urllib3_context
 from bs4 import BeautifulSoup
 import re
 import logging
 import warnings
 import sys
 import subprocess
+import requests
 import pkg_resources
 import datetime
 from xml.etree import ElementTree as ET
 from urllib.parse import urlparse
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.ssl_ import create_urllib3_context
+import ssl
+print('OP_NO_RENEGOTIATION' in dir(ssl))
+
+# Create the SSL context for urllib3
+ctx = create_urllib3_context()
+ctx.load_default_certs()
+ctx.options |= 0x4  # ssl.OP_LEGACY_SERVER_CONNECT
+http = urllib3.PoolManager(ssl_context=ctx)
 
 # How many checks per URL
 MAX_RETRIES = 5
@@ -217,7 +225,7 @@ def is_site_compromised(url):
         try:
             webshell_path = site + "/vpn/themes/" + ioc
             logging.info(f"Making request to {webshell_path} to determine if compromised")
-            response = requests.get(webshell_path, verify=False, allow_redirects=False, timeout=MAX_RETRIES)
+            response = http.request('GET', webshell_path, redirect=False, timeout=MAX_RETRIES)
         except requests.exceptions.RequestException as e:
             logging.error(f"An error occurred while trying to connect to {webshell_path}. Error: {e}")
             return
@@ -228,12 +236,29 @@ def is_site_compromised(url):
         elif response.status_code != 404:
             logging.info(f"{webshell_path} - Benign Result: {response.text}")
 
+# This is the 2.12.2 requests' DEFAULT_CIPHERS, but with added
+# !SSLv2 and !aNULL, which disable the use of SSLv2 and NULL
+# ciphers respectively, NULL ciphers and SSLv2 are insecure.
+CIPHERS = (
+    'ECDH+AESGCM:ECDH+CHACHA20:DHE+AESGCM:DHE+CHACHA20:ECDH+AES256:'
+    'DHE+AES256:ECDH+AES128:DHE+AES:ECDH+HIGH:!DH:!aNULL:'
+    '!eNULL:!MD5:!3DES:!CAMELLIA:!AES128'
+)
 
+class DESAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        context = create_urllib3_context(ciphers=CIPHERS)
+        context.options &= ~ssl.OP_NO_SSLv2 & ~ssl.OP_NO_SSLv3
+        context.options |= ssl.OP_NO_RENEGOTIATION
+        kwargs['ssl_context'] = context
+        return super().init_poolmanager(*args, **kwargs)
 
 def is_site_vulnerable(url):
+    session = requests.Session()
+    session.mount('https://', DESAdapter())
     try:
         logging.info(f"Making request to {url}")
-        response = requests.get(url, verify=False, timeout=MAX_RETRIES)
+        response = session.get(url, verify=False, timeout=MAX_RETRIES)
     except requests.exceptions.RequestException as e:
         logging.error(f"An error occurred while trying to connect to {url}. Error: {e}")
         print(f"{url} - [UNREACHABLE]")
@@ -366,18 +391,18 @@ def main():
 
     Author: Bryan Smith (@securekomodo)
     ------------------------
-    _________ .__  __         .__                              
-    \_   ___ \|__|/  |________|__|__  ___                      
-    /    \  \/|  \   __\_  __ \  \  \/  /                      
-    \     \___|  ||  |  |  | \/  |>    <                       
-     \______  /__||__|  |__|  |__/__/\_ \                      
-        \/                         \/                      
-    .___                                     __                
-    |   | ____   ____________   ____   _____/  |_  ___________ 
+    _________ .__  __         .__
+    \_   ___ \|__|/  |________|__|__  ___
+    /    \  \/|  \   __\_  __ \  \  \/  /
+    \     \___|  ||  |  |  | \/  |>    <
+     \______  /__||__|  |__|  |__/__/\_ \
+        \/                         \/
+    .___                                     __
+    |   | ____   ____________   ____   _____/  |_  ___________
     |   |/    \ /  ___/\____ \_/ __ \_/ ___\   __\/  _ \_  __ \\
     |   |   |  \\___ \ |  |_> >  ___/\  \___|  | (  <_> )  | \/
-    |___|___|  /____  >|   __/ \___  >\___  >__|  \____/|__|   
-             \/     \/ |__|        \/     \/                                
+    |___|___|  /____  >|   __/ \___  >\___  >__|  \____/|__|
+             \/     \/ |__|        \/     \/
 
        CVE-2023-3519 Inspector
        ------------------------
